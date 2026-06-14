@@ -138,7 +138,11 @@ on_winch() {
     update_dims
     case "$CURRENT_SCREEN" in
         form)     render_form ;;
-        progress) render_progress ;;
+        progress)
+            stop_spinner
+            render_progress
+            [[ -n "$RUNNING_IDX" ]] && start_spinner "$RUNNING_IDX"
+            ;;
         sshpaste) render_sshpaste ;;
     esac
 }
@@ -447,6 +451,8 @@ STATUS_SEP_ROW=0
 STATUS_ROW=0
 TOTAL_STEPS=0
 CURRENT_STEP=0
+LAST_STATUS="Starting..."
+RUNNING_IDX=""
 
 add_reg() { R_GROUP+=("$1"); R_NAME+=("$2"); R_KEY+=("$3"); R_STATUS+=("pending"); }
 
@@ -523,6 +529,7 @@ draw_step_line() {
 }
 
 set_status() {
+    LAST_STATUS="$1"
     move_to "$STATUS_ROW" 1; clear_line
     printf "  ${DIM}${ARROW} ${WHITE}%s${RESET}" "$1"
 }
@@ -545,7 +552,7 @@ render_progress() {
     done
     move_to "$STATUS_SEP_ROW" 1; clear_line
     printf "  ${DIM}${CYAN}"; hr "─" $((TERM_COLS - 4)); printf "${RESET}"
-    set_status "Starting..."
+    set_status "$LAST_STATUS"
 }
 
 # ============================================================
@@ -583,13 +590,28 @@ stop_spinner() {
 run_step() {
     local idx="$1"; shift
     R_STATUS[$idx]="running"
+    RUNNING_IDX="$idx"
     draw_step_line "$idx"
     set_status "Installing: ${R_NAME[$idx]}"
     start_spinner "$idx"
 
     log "STEP ${R_KEY[$idx]}: ${R_NAME[$idx]}"
-    if "$@" >> "$LOG_FILE" 2>&1; then
-        stop_spinner
+    # Run the worker in the background and wait on it. A foreground
+    # external command would defer the SIGWINCH trap until it finished,
+    # so the screen wouldn't redraw on resize mid-step; wait IS
+    # interruptible by traps, so on_winch can repaint immediately.
+    "$@" >> "$LOG_FILE" 2>&1 &
+    local worker=$! rc
+    while true; do
+        wait "$worker"; rc=$?
+        (( rc == 0 )) && break
+        (( rc > 128 )) && kill -0 "$worker" 2>/dev/null && continue  # trap interrupted us
+        break
+    done
+
+    RUNNING_IDX=""
+    stop_spinner
+    if (( rc == 0 )); then
         R_STATUS[$idx]="done"
         CURRENT_STEP=$((CURRENT_STEP + 1))
         draw_bar $(( CURRENT_STEP * 100 / TOTAL_STEPS ))
@@ -597,8 +619,6 @@ run_step() {
         set_status "Completed: ${R_NAME[$idx]}"
         log "STEP ${R_KEY[$idx]}: SUCCESS"
     else
-        local rc=$?
-        stop_spinner
         R_STATUS[$idx]="failed"
         draw_step_line "$idx"
         set_status "FAILED: ${R_NAME[$idx]}   |   Log: $LOG_FILE"
