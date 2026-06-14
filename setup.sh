@@ -240,7 +240,8 @@ field_visible() {
 }
 
 is_focusable_idx() {
-    local i="$1" k="${FORM_KIND[$i]}" key="${FORM_KEY[$i]}"
+    local i="$1"
+    local k="${FORM_KIND[$i]}" key="${FORM_KEY[$i]}"
     [[ "$k" == "group" || "$k" == "note" ]] && return 1
     field_visible "$key" || return 1
     return 0
@@ -548,7 +549,8 @@ render_progress() {
 # ============================================================
 SPINNER_PID=""
 start_spinner() {
-    local idx="$1" row name="${R_NAME[$idx]}"
+    local idx="$1" row
+    local name="${R_NAME[$idx]}"
     row=$(step_row "$idx")
     (
         local maxw=$((TERM_COLS - 12)); (( maxw < 10 )) && maxw=10
