@@ -377,7 +377,11 @@ run_form() {
     while true; do
         if IFS= read -rsn1 ch; then
             if [[ "$ch" == "" ]]; then                       # Enter
-                if validate_form; then return; else render_form; fi
+                local kind="${FORM_KIND[$ACTIVE]}"
+                if [[ "$kind" == "text" || "$kind" == "secret" ]]; then
+                    focus_next; render_form
+                elif validate_form; then return
+                else render_form; fi
             elif [[ "$ch" == $'\t' ]]; then
                 focus_next; render_form
             elif [[ "$ch" == $'\x1b' ]]; then                # arrow keys
