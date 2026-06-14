@@ -84,6 +84,17 @@ case "$UBUNTU_CODENAME_DETECTED" in
 esac
 
 # ============================================================
+# VIRTUALIZATION DETECTION
+# QEMU Guest Agent is only relevant on a QEMU/KVM guest (which is
+# what a Proxmox VM is). Gate the option on detecting that host type;
+# on bare metal or other hypervisors the toggle is hidden entirely.
+# ============================================================
+IS_QEMU_GUEST=0
+case "$(systemd-detect-virt 2>/dev/null)" in
+    qemu|kvm) IS_QEMU_GUEST=1 ;;
+esac
+
+# ============================================================
 # ROOT CHECK
 # ============================================================
 if [[ $EUID -ne 0 ]]; then
@@ -209,7 +220,7 @@ build_form() {
 
     FV[USERNAME]=""; FV[PASSWORD]=""; FV[GITHUB]=""; FV[HOSTNAME]=""
     FV[AGENT_CLAUDE]=1; FV[AGENT_CODEX]=0; FV[AGENT_AGY]=0
-    FV[QEMU]=1; FV[TAILSCALE]=0
+    FV[QEMU]=0; FV[TAILSCALE]=0
     if [[ -n "$DETECTED_USER" ]]; then FV[CREATE_USER]=0; else FV[CREATE_USER]=1; fi
 }
 
@@ -222,6 +233,8 @@ field_visible() {
             [[ "${FV[CREATE_USER]}" == "1" ]] && return 0 || return 1 ;;
         USERNOTE)
             [[ "${FV[CREATE_USER]}" != "1" && -n "$DETECTED_USER" ]] && return 0 || return 1 ;;
+        QEMU)
+            (( IS_QEMU_GUEST )) && return 0 || return 1 ;;
         *) return 0 ;;
     esac
 }
@@ -454,7 +467,7 @@ build_registry() {
     add_reg "SYSTEM CONFIG"    "Hostname Configuration"     HOSTNAME
     add_reg "SYSTEM CONFIG"    "Speedtest CLI"              SPEEDTEST
 
-    [[ "${FV[QEMU]}"      == "1" ]] && add_reg "INFRASTRUCTURE" "QEMU Guest Agent" QEMU
+    [[ "${FV[QEMU]}" == "1" ]] && (( IS_QEMU_GUEST )) && add_reg "INFRASTRUCTURE" "QEMU Guest Agent" QEMU
     [[ "${FV[TAILSCALE]}" == "1" ]] && add_reg "INFRASTRUCTURE" "Tailscale"        TAILSCALE
 
     local i

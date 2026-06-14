@@ -37,7 +37,7 @@ On launch it shows a **preflight TUI form** to configure the run, then executes 
 - Google Antigravity / `agy` (`antigravity.google/cli/install.sh`)
 
 **Infrastructure** (optional toggles)
-- QEMU Guest Agent — on by default
+- QEMU Guest Agent — off by default, and the toggle is **only shown when running on a QEMU/KVM guest** (e.g. a Proxmox VM), detected via `systemd-detect-virt`. On bare metal or other hypervisors it is hidden and cannot be installed.
 - Tailscale (`tailscale.com/install.sh`)
 
 ### Steps performed
