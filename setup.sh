@@ -661,12 +661,10 @@ ensure_local_bin_path() {
 }
 
 step_update() {
-    export DEBIAN_FRONTEND=noninteractive
     apt update -y
     apt upgrade -y
 }
 step_essentials() {
-    export DEBIAN_FRONTEND=noninteractive
     apt install -y build-essential net-tools btop git ca-certificates gnupg lsb-release
 }
 step_nodejs() {
@@ -737,7 +735,6 @@ step_ssh_hardening() {
 step_timezone() { timedatectl set-timezone America/New_York; }
 step_hostname() { [[ -n "$NEW_HOSTNAME" ]] && hostnamectl set-hostname "$NEW_HOSTNAME"; return 0; }
 step_qemu_guest() {
-    export DEBIAN_FRONTEND=noninteractive
     apt install -y qemu-guest-agent
     systemctl enable qemu-guest-agent
     systemctl start qemu-guest-agent
