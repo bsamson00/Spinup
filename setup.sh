@@ -103,6 +103,17 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # ============================================================
+# NON-INTERACTIVE APT / NEEDRESTART
+# Exported globally so every step (including the node/docker/tailscale
+# installer scripts that run their own apt) inherits these. needrestart
+# would otherwise pop a "Pending kernel upgrade" / service-restart dialog
+# that blocks apt; suspend it entirely since we reboot at the end.
+# ============================================================
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+export NEEDRESTART_SUSPEND=1
+
+# ============================================================
 # LOGGING
 # ============================================================
 touch "$LOG_FILE"
