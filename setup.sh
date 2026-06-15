@@ -198,6 +198,22 @@ draw_bar() {
     printf "${DIM}${CYAN}│${RESET}"
 }
 
+# Format a duration in seconds as M:SS / H:MM:SS
+fmt_elapsed() {
+    local e="$1"; (( e < 0 )) && e=0
+    local h=$(( e / 3600 )) m=$(( (e % 3600) / 60 )) s=$(( e % 60 ))
+    if (( h > 0 )); then printf "%d:%02d:%02d" "$h" "$m" "$s"; else printf "%d:%02d" "$m" "$s"; fi
+}
+
+# Live elapsed-time clock, drawn at the top-right of the box title row
+draw_timer() {
+    (( START_EPOCH == 0 )) && return
+    local now; printf -v now '%(%s)T' -1
+    local label; label="$(fmt_elapsed $(( now - START_EPOCH )))"
+    local col=$(( TERM_COLS - ${#label} - 4 )); (( col < 1 )) && col=1
+    move_to 2 "$col"; printf "${BR_CYAN}${BOLD}⏱ %s${RESET}" "$label"
+}
+
 # ============================================================
 # PREFLIGHT FORM MODEL (single consolidated screen)
 # ============================================================
@@ -464,6 +480,7 @@ TOTAL_STEPS=0
 CURRENT_STEP=0
 LAST_STATUS="Starting..."
 RUNNING_IDX=""
+START_EPOCH=0
 
 add_reg() { R_GROUP+=("$1"); R_NAME+=("$2"); R_KEY+=("$3"); R_STATUS+=("pending"); }
 
@@ -564,6 +581,7 @@ render_progress() {
     move_to "$STATUS_SEP_ROW" 1; clear_line
     printf "  ${DIM}${CYAN}"; hr "─" $((TERM_COLS - 4)); printf "${RESET}"
     set_status "$LAST_STATUS"
+    draw_timer
 }
 
 # ============================================================
@@ -581,6 +599,7 @@ start_spinner() {
             for ch in "${SPINNER_CHARS[@]}"; do
                 move_to "$row" 1; clear_line
                 printf "      ${BR_YELLOW}%s${RESET}  ${BOLD}%s${RESET} ${DIM}${YELLOW}...${RESET}" "$ch" "$n"
+                draw_timer
                 sleep 0.08
             done
         done
@@ -770,6 +789,8 @@ render_complete() {
     printf "  ${BOLD}User${RESET}        ${SETUP_USERNAME} (sudo + docker)\n"
     printf "  ${BOLD}SSH${RESET}         Key only, root disabled\n"
     printf "  ${BOLD}Timezone${RESET}    America/New_York\n"
+    local now; printf -v now '%(%s)T' -1
+    printf "  ${BOLD}Total time${RESET}  %s\n" "$(fmt_elapsed $(( now - START_EPOCH )))"
     printf "  ${BOLD}Log${RESET}         %s\n\n" "$LOG_FILE"
     printf "  ${BOLD}Connect${RESET}     ${BR_CYAN}ssh ${SETUP_USERNAME}@$(hostname -I 2>/dev/null | awk '{print $1}')${RESET}\n\n"
     printf "  ${DIM}${CYAN}"; hr "─" 50; printf "${RESET}\n"
@@ -828,6 +849,7 @@ log "Infra: qemu=${FV[QEMU]} tailscale=${FV[TAILSCALE]}"
 build_registry
 
 # Run
+printf -v START_EPOCH '%(%s)T' -1
 CURRENT_SCREEN="progress"
 render_progress
 
