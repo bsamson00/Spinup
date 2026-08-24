@@ -1,8 +1,6 @@
-# vmsetup
+# spinup
 
 Interactive first-boot provisioning script for fresh **Ubuntu 24.04 (noble)** and **26.04 (resolute)** servers/VMs. One script, a TUI to pick options, then it installs and hardens everything and reboots.
-
-Personal use only.
 
 ## Quick start
 
@@ -15,7 +13,7 @@ sudo bash setup.sh
 Or pipe it straight from the remote:
 
 ```bash
-curl -fsSL https://gitea.lan2.me/Personal/vmsetup/raw/branch/main/setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/bsamson00/spinup/main/setup.sh | sudo bash
 ```
 
 The script reattaches stdin to the terminal, so `curl | bash` still gives you the interactive form.
@@ -27,16 +25,19 @@ On launch it shows a **preflight TUI form** to configure the run, then executes 
 ### Preflight form options
 
 **Account**
+
 - Create a new user (username + password) **or** use the detected `sudo` user / an existing one
 - GitHub username — pulls SSH public keys from `github.com/<user>.keys`. Leave blank to paste a key manually on a follow-up screen
 - Hostname (blank = keep current)
 
 **AI agents** (optional toggles)
+
 - Claude Code (`claude.ai/install.sh`) — on by default
 - OpenAI Codex (`npm i -g @openai/codex`)
 - Google Antigravity / `agy` (`antigravity.google/cli/install.sh`)
 
 **Infrastructure** (optional toggles)
+
 - QEMU Guest Agent — off by default, and the toggle is **only shown when running on a QEMU/KVM guest** (e.g. a Proxmox VM), detected via `systemd-detect-virt`. On bare metal or other hypervisors it is hidden and cannot be installed.
 - Tailscale (`tailscale.com/install.sh`)
 
@@ -77,3 +78,7 @@ After completion the script prints a summary (hostname, user, SSH mode, timezone
 - **Logging:** writes `ubuntu-setup-<timestamp>.log` (moved into the new user's home once the account exists).
 - **TUI:** resize-aware (redraws on `SIGWINCH`); needs at least 54×18 terminal.
 - **It reboots at the end.** Don't run it on a box you can't afford to bounce.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
