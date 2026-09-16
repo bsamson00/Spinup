@@ -2,6 +2,8 @@
 
 Interactive first-boot provisioning script for fresh **Ubuntu 24.04 (noble)** and **26.04 (resolute)** servers/VMs. One script, a TUI to pick options, then it installs and hardens everything and reboots.
 
+> **A personal project.** I built spinup for my own servers and VMs so I could stop repeating the same setup and hardening steps by hand every time I spun up a new box. I'm sharing it in case it saves someone else that time too. It reflects my own preferences (tools, defaults, SSH policy), so read through it before running it and adapt it to your needs. It's provided as-is, with no warranty. See the [license](LICENSE).
+
 ## Quick start
 
 Run as root on a fresh install:
