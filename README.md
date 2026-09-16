@@ -20,7 +20,7 @@ The script reattaches stdin to the terminal, so `curl | bash` still gives you th
 
 ## What it does
 
-On launch it shows a **preflight TUI form** to configure the run, then executes the selected steps with a live progress screen, and finally **reboots after 10 seconds**.
+On launch it shows a **preflight TUI form** to configure the run, then a **review & confirm screen** summarizing everything it's about to do. Nothing is installed until you choose **Install** there. It then executes the selected steps with a live progress screen, and finally **reboots after 10 seconds**.
 
 ### Preflight form options
 
@@ -41,6 +41,18 @@ On launch it shows a **preflight TUI form** to configure the run, then executes 
 
 - QEMU Guest Agent — off by default, and the toggle is **only shown when running on a QEMU/KVM guest** (e.g. a Proxmox VM), detected via `systemd-detect-virt`. On bare metal or other hypervisors it is hidden and cannot be installed.
 - Tailscale (`tailscale.com/install.sh`) — installs only. After the reboot, run `sudo tailscale up` to authenticate and join your tailnet
+
+**Controls:** Tab / ↑↓ move between fields, Space toggles an option or opens the timezone picker, and the **REVIEW & INSTALL** button at the bottom validates the form and continues.
+
+### Review & confirm
+
+Before anything runs, a summary screen lists:
+
+- **Account & access** — the user (new, or existing with a note that its `authorized_keys` will be replaced), the SSH key source (GitHub user and key count, or the pasted key's type and fingerprint), and that root login and password auth will be disabled
+- **System** — hostname, timezone, and the base packages that are always installed
+- **Optional** — selected AI agents and infrastructure
+
+Choose **Install** to start or **Back** (or Esc) to return to the form with your entries kept. **Back is selected by default**, so a stray Enter won't start the install. If you pasted an SSH key manually, you'll be asked for it again after going back.
 
 ### Steps performed
 
