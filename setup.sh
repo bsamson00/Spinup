@@ -19,6 +19,10 @@ fi
 # Must be run as root (sudo)
 # ============================================================
 
+# --debug: full UI walkthrough, but no step runs, nothing is changed, no reboot
+DEBUG=0
+[[ "${1:-}" == "--debug" ]] && DEBUG=1
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null || echo /tmp)"
 LOG_FILE="${SCRIPT_DIR}/ubuntu-setup-$(date +%Y%m%d-%H%M%S).log"
 
@@ -73,13 +77,16 @@ fi
 UBUNTU_VERSION_ID="${VERSION_ID:-unknown}"
 UBUNTU_CODENAME_DETECTED="${UBUNTU_CODENAME:-${VERSION_CODENAME:-unknown}}"
 SETUP_BOX_TITLE="UBUNTU ${UBUNTU_VERSION_ID} SERVER SETUP"
+(( DEBUG )) && SETUP_BOX_TITLE+=" [DEBUG]"
 
 case "$UBUNTU_CODENAME_DETECTED" in
     noble|resolute) ;;
     *)
-        printf "${BR_RED}${BOLD}ERROR:${RESET} This script supports Ubuntu 24.04 (noble) and 26.04 (resolute) only.\n"
-        printf "${DIM}Detected: ${PRETTY_NAME:-$UBUNTU_VERSION_ID} (codename: ${UBUNTU_CODENAME_DETECTED})${RESET}\n"
-        exit 1
+        if (( ! DEBUG )); then
+            printf "${BR_RED}${BOLD}ERROR:${RESET} This script supports Ubuntu 24.04 (noble) and 26.04 (resolute) only.\n"
+            printf "${DIM}Detected: ${PRETTY_NAME:-$UBUNTU_VERSION_ID} (codename: ${UBUNTU_CODENAME_DETECTED})${RESET}\n"
+            exit 1
+        fi
         ;;
 esac
 
@@ -97,7 +104,7 @@ esac
 # ============================================================
 # ROOT CHECK
 # ============================================================
-if [[ $EUID -ne 0 ]]; then
+if [[ $EUID -ne 0 ]] && (( ! DEBUG )); then
     printf "${BR_RED}${BOLD}ERROR:${RESET} This script must be run as root (sudo).\n"
     exit 1
 fi
@@ -773,7 +780,12 @@ run_step() {
     # external command would defer the SIGWINCH trap until it finished,
     # so the screen wouldn't redraw on resize mid-step; wait IS
     # interruptible by traps, so on_winch can repaint immediately.
-    "$@" >> "$LOG_FILE" 2>&1 &
+    if (( DEBUG )); then
+        log "DEBUG: not running $*"
+        sleep 1 &
+    else
+        "$@" >> "$LOG_FILE" 2>&1 &
+    fi
     local worker=$! rc
     while true; do
         wait "$worker"; rc=$?
@@ -942,7 +954,11 @@ render_complete() {
     printf "  ${BOLD}Log${RESET}         %s\n\n" "$LOG_FILE"
     printf "  ${BOLD}Connect${RESET}     ${BR_CYAN}ssh ${SETUP_USERNAME}@$(hostname -I 2>/dev/null | awk '{print $1}')${RESET}\n\n"
     printf "  ${DIM}${CYAN}"; hr "─" 50; printf "${RESET}\n"
-    printf "  ${BR_YELLOW}Rebooting in 10 seconds...${RESET}\n\n"
+    if (( DEBUG )); then
+        printf "  ${BR_YELLOW}Debug run: nothing was installed or changed, not rebooting.${RESET}\n\n"
+    else
+        printf "  ${BR_YELLOW}Rebooting in 10 seconds...${RESET}\n\n"
+    fi
 }
 
 # ============================================================
@@ -1018,14 +1034,14 @@ run_step "${RIDX[DOCKER]}"     step_docker
 
 if (( SKIP_USER_CREATION )); then
     skip_step "${RIDX[USER]}"
-    step_ensure_docker_group >> "$LOG_FILE" 2>&1
+    (( DEBUG )) || step_ensure_docker_group >> "$LOG_FILE" 2>&1
 else
     run_step "${RIDX[USER]}" step_create_user
 fi
 
 # Resolve the real home directory (may not be /home/<user> for existing accounts)
 USER_HOME="$(getent passwd "$SETUP_USERNAME" | cut -d: -f6)"
-if [[ -z "$USER_HOME" || ! -d "$USER_HOME" ]]; then
+if [[ -z "$USER_HOME" || ! -d "$USER_HOME" ]] && (( ! DEBUG )); then
     set_status "FAILED: no home directory for ${SETUP_USERNAME}   |   Log: $LOG_FILE"
     log "No home directory found for ${SETUP_USERNAME} (got '${USER_HOME}')"
     show_cursor
@@ -1035,11 +1051,11 @@ fi
 
 # Internal (not displayed): npm global prefix so the user never needs sudo
 log "Configuring npm global prefix for ${SETUP_USERNAME}"
-step_configure_npm_global >> "$LOG_FILE" 2>&1
+(( DEBUG )) || step_configure_npm_global >> "$LOG_FILE" 2>&1
 
 # Move log into the user's home now that the account exists
 NEW_LOG="${USER_HOME}/$(basename "$LOG_FILE")"
-cp "$LOG_FILE" "$NEW_LOG" 2>/dev/null && { OLD_LOG="$LOG_FILE"; LOG_FILE="$NEW_LOG"; chown "${SETUP_USERNAME}:" "$LOG_FILE"; rm -f "$OLD_LOG"; }
+(( ! DEBUG )) && cp "$LOG_FILE" "$NEW_LOG" 2>/dev/null && { OLD_LOG="$LOG_FILE"; LOG_FILE="$NEW_LOG"; chown "${SETUP_USERNAME}:" "$LOG_FILE"; rm -f "$OLD_LOG"; }
 
 run_step "${RIDX[SSHKEYS]}"   step_ssh_keys
 run_step "${RIDX[SSHHARDEN]}" step_ssh_hardening
@@ -1060,6 +1076,7 @@ CURRENT_SCREEN=""
 show_cursor
 log "ALL STEPS COMPLETE. Rebooting."
 render_complete
+(( DEBUG )) && exit 0
 sleep 10
 reboot
 
