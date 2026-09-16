@@ -155,6 +155,7 @@ on_winch() {
             [[ -n "$RUNNING_IDX" ]] && start_spinner "$RUNNING_IDX"
             ;;
         sshpaste) render_sshpaste ;;
+        tzpick)   render_tzpick ;;
     esac
 }
 trap on_winch WINCH
@@ -226,7 +227,34 @@ declare -A ROW_OF VALCOL_OF VALW_OF
 
 ACTIVE=0
 FORM_ERROR=""
+FORM_STATUS=""
 DETECTED_USER=""
+GITHUB_KEYS=""
+DEFAULT_TIMEZONE="America/New_York"
+
+# ============================================================
+# INPUT VALIDATION
+# ============================================================
+valid_username() {
+    local re='^[a-z_][a-z0-9_-]{0,31}$'
+    [[ "$1" =~ $re && "$1" != "root" ]]
+}
+valid_github_user() {
+    local re='^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$'
+    [[ "$1" =~ $re ]]
+}
+valid_hostname() {
+    local h="$1" label parts re='^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$'
+    (( ${#h} <= 253 )) || return 1
+    [[ "$h" == .* || "$h" == *. ]] && return 1
+    IFS=. read -ra parts <<< "$h"
+    for label in "${parts[@]}"; do [[ "$label" =~ $re ]] || return 1; done
+    return 0
+}
+# True if the text contains at least one parseable SSH public key
+valid_ssh_keys() {
+    [[ -n "$1" ]] && ssh-keygen -lf /dev/stdin <<< "$1" >/dev/null 2>&1
+}
 
 add_item() {
     FORM_KIND+=("$1"); FORM_KEY+=("$2"); FORM_LABEL+=("$3")
@@ -241,6 +269,7 @@ build_form() {
     add_item secret PASSWORD     "Password"
     add_item text   GITHUB       "GitHub user (SSH keys)"
     add_item text   HOSTNAME     "Hostname (blank = keep)"
+    add_item select TIMEZONE     "Timezone"
     add_item group  G_AGENTS     "AI AGENTS"
     add_item toggle AGENT_CLAUDE "Claude Code"
     add_item toggle AGENT_CODEX  "OpenAI Codex"
@@ -250,6 +279,7 @@ build_form() {
     add_item toggle TAILSCALE    "Tailscale"
 
     FV[USERNAME]=""; FV[PASSWORD]=""; FV[GITHUB]=""; FV[HOSTNAME]=""
+    FV[TIMEZONE]="$DEFAULT_TIMEZONE"
     FV[AGENT_CLAUDE]=1; FV[AGENT_CODEX]=0; FV[AGENT_AGY]=0
     FV[QEMU]=0; FV[TAILSCALE]=0
     if [[ -n "$DETECTED_USER" ]]; then FV[CREATE_USER]=0; else FV[CREATE_USER]=1; fi
@@ -322,7 +352,7 @@ draw_form_field() {
         return
     fi
 
-    # text / secret
+    # text / secret / select
     local lbl="$label"
     [[ "$key" == "USERNAME" && "${FV[CREATE_USER]}" != "1" ]] && lbl="Existing username"
     local labelw=22; (( TERM_COLS < 72 )) && labelw=15
@@ -377,9 +407,11 @@ render_form() {
     done
 
     ((row++))
-    move_to "$row" 1; printf "  ${DIM}Tab / ${ARROW}${ARROW} navigate    Space toggle    Enter continue${RESET}"; ((row++))
+    move_to "$row" 1; printf "  ${DIM}Tab / ${ARROW}${ARROW} navigate    Space toggle / choose    Enter continue${RESET}"; ((row++))
     if [[ -n "$FORM_ERROR" ]]; then
         move_to "$row" 1; clear_line; printf "  ${BR_RED}%s${RESET}" "$FORM_ERROR"
+    elif [[ -n "$FORM_STATUS" ]]; then
+        move_to "$row" 1; clear_line; printf "  ${BR_YELLOW}%s${RESET}" "$FORM_STATUS"
     fi
     place_form_cursor
 }
@@ -388,15 +420,121 @@ append_char() { local key="$1" c="$2"; (( ${#FV[$key]} < 64 )) && FV[$key]+="$c"
 
 validate_form() {
     FORM_ERROR=""
+    local u="${FV[USERNAME]}" gh="${FV[GITHUB]}" hn="${FV[HOSTNAME]}"
     if [[ "${FV[CREATE_USER]}" == "1" ]]; then
-        [[ -z "${FV[USERNAME]}" ]] && { FORM_ERROR="Username is required."; return 1; }
+        [[ -z "$u" ]] && { FORM_ERROR="Username is required."; return 1; }
+        valid_username "$u" || { FORM_ERROR="Invalid username: a-z 0-9 _ - only, max 32, not root."; return 1; }
         [[ -z "${FV[PASSWORD]}" ]] && { FORM_ERROR="Password is required."; return 1; }
-    else
-        if [[ -z "$DETECTED_USER" && -z "${FV[USERNAME]}" ]]; then
-            FORM_ERROR="Enter an existing username, or enable 'Create a new user'."; return 1
+    elif [[ -z "$DETECTED_USER" ]]; then
+        [[ -z "$u" ]] && { FORM_ERROR="Enter an existing username, or enable 'Create a new user'."; return 1; }
+        [[ "$u" == "root" ]] && { FORM_ERROR="Pick a non-root user."; return 1; }
+        id "$u" &>/dev/null || { FORM_ERROR="User '$u' does not exist."; return 1; }
+    fi
+    [[ -n "$gh" ]] && ! valid_github_user "$gh" && { FORM_ERROR="Invalid GitHub username."; return 1; }
+    [[ -n "$hn" ]] && ! valid_hostname "$hn" && { FORM_ERROR="Invalid hostname: letters, digits, - and . only."; return 1; }
+    [[ -z "${FV[TIMEZONE]}" ]] && { FORM_ERROR="Timezone is required."; return 1; }
+
+    # Fetch GitHub keys now so a user with no keys is caught before
+    # anything runs (SSH hardening disables password login).
+    GITHUB_KEYS=""
+    if [[ -n "$gh" ]]; then
+        FORM_STATUS="Fetching SSH keys from github.com/${gh}.keys ..."
+        render_form
+        FORM_STATUS=""
+        GITHUB_KEYS="$(curl -fsSL --max-time 15 "https://github.com/${gh}.keys" 2>/dev/null)"
+        if ! valid_ssh_keys "$GITHUB_KEYS"; then
+            GITHUB_KEYS=""
+            FORM_ERROR="No valid SSH keys at github.com/${gh}.keys (clear field to paste one)."
+            return 1
         fi
     fi
     return 0
+}
+
+# ============================================================
+# TIMEZONE PICKER (type-to-filter list)
+# ============================================================
+TZ_LIST=(); TZ_MATCH=(); TZ_FILTER=""; TZ_SEL=0; TZ_TOP=0
+
+load_timezones() {
+    (( ${#TZ_LIST[@]} )) && return
+    mapfile -t TZ_LIST < <(timedatectl list-timezones 2>/dev/null)
+    (( ${#TZ_LIST[@]} )) || TZ_LIST=("$DEFAULT_TIMEZONE" "UTC")
+}
+
+tz_apply_filter() {
+    local z f="${TZ_FILTER,,}"
+    TZ_MATCH=()
+    for z in "${TZ_LIST[@]}"; do
+        [[ -z "$f" || "${z,,}" == *"$f"* ]] && TZ_MATCH+=("$z")
+    done
+    TZ_SEL=0; TZ_TOP=0
+}
+
+render_tzpick() {
+    if (( TERM_COLS < 54 || TERM_LINES < 18 )); then too_small; return; fi
+    clear_screen
+    draw_box "$SETUP_BOX_TITLE" "$BR_CYAN"
+    move_to 5 1; printf "  ${BOLD}${BR_WHITE}Select Timezone${RESET}"
+    move_to 6 1; printf "  ${DIM}${CYAN}"; hr "─" $((TERM_COLS - 4)); printf "${RESET}"
+    move_to 8 1; printf "    ${DIM}Filter${RESET}  ${BR_CYAN}[ ${RESET}%s${BR_CYAN} ]${RESET}" "$TZ_FILTER"
+
+    local n=${#TZ_MATCH[@]} row=10 visible=$(( TERM_LINES - 12 )) i
+    (( visible < 1 )) && visible=1
+    (( TZ_SEL < TZ_TOP )) && TZ_TOP=$TZ_SEL
+    (( TZ_SEL >= TZ_TOP + visible )) && TZ_TOP=$(( TZ_SEL - visible + 1 ))
+    if (( n == 0 )); then
+        move_to "$row" 1; printf "      ${DIM}No matching timezones${RESET}"
+    fi
+    for (( i = TZ_TOP; i < n && i < TZ_TOP + visible; i++ )); do
+        move_to "$row" 1
+        if (( i == TZ_SEL )); then
+            printf "    ${BR_CYAN}${BOLD}${ARROW} ${BR_WHITE}%s${RESET}" "${TZ_MATCH[$i]}"
+        else
+            printf "      ${WHITE}%s${RESET}" "${TZ_MATCH[$i]}"
+        fi
+        ((row++))
+    done
+    move_to $((TERM_LINES - 1)) 1
+    printf "  ${DIM}Type to filter    Up/Down move    Enter select    Esc cancel    (%d/%d)${RESET}" "$n" "${#TZ_LIST[@]}"
+}
+
+run_tzpick() {
+    load_timezones
+    CURRENT_SCREEN="tzpick"
+    hide_cursor
+    TZ_FILTER=""; tz_apply_filter
+    local i
+    for i in "${!TZ_MATCH[@]}"; do [[ "${TZ_MATCH[$i]}" == "${FV[TIMEZONE]}" ]] && { TZ_SEL=$i; break; }; done
+    render_tzpick
+    local ch a b c page=$(( TERM_LINES - 12 ))
+    (( page < 1 )) && page=1
+    while true; do
+        IFS= read -rsn1 ch || continue   # read interrupted (likely SIGWINCH); trap already redrew
+        if [[ "$ch" == "" ]]; then                           # Enter
+            (( ${#TZ_MATCH[@]} )) && { FV[TIMEZONE]="${TZ_MATCH[$TZ_SEL]}"; break; }
+        elif [[ "$ch" == $'\x1b' ]]; then
+            a=""; b=""
+            IFS= read -rsn1 -t 0.05 a || true
+            IFS= read -rsn1 -t 0.05 b || true
+            [[ -z "$a" ]] && break                           # bare Esc = cancel
+            if [[ "$a" == "[" ]]; then
+                case "$b" in
+                    A) (( TZ_SEL > 0 )) && ((TZ_SEL--)) ;;
+                    B) (( TZ_SEL < ${#TZ_MATCH[@]} - 1 )) && ((TZ_SEL++)) ;;
+                    5) IFS= read -rsn1 -t 0.05 c; TZ_SEL=$(( TZ_SEL - page < 0 ? 0 : TZ_SEL - page )) ;;
+                    6) IFS= read -rsn1 -t 0.05 c; TZ_SEL=$(( TZ_SEL + page )); (( TZ_SEL > ${#TZ_MATCH[@]} - 1 )) && TZ_SEL=$(( ${#TZ_MATCH[@]} - 1 )); (( TZ_SEL < 0 )) && TZ_SEL=0 ;;
+                esac
+            fi
+        elif [[ "$ch" == $'\x7f' || "$ch" == $'\x08' ]]; then
+            TZ_FILTER="${TZ_FILTER%?}"; tz_apply_filter
+        elif [[ "$ch" =~ [[:print:]] ]]; then
+            (( ${#TZ_FILTER} < 40 )) && { TZ_FILTER+="$ch"; tz_apply_filter; }
+        fi
+        render_tzpick
+    done
+    CURRENT_SCREEN="form"
+    render_form
 }
 
 run_form() {
@@ -411,6 +549,8 @@ run_form() {
                 local kind="${FORM_KIND[$ACTIVE]}"
                 if [[ "$kind" == "text" || "$kind" == "secret" ]]; then
                     focus_next; render_form
+                elif [[ "$kind" == "select" ]]; then
+                    run_tzpick
                 elif validate_form; then return
                 else render_form; fi
             elif [[ "$ch" == $'\t' ]]; then
@@ -431,6 +571,8 @@ run_form() {
                 if [[ "$kind" == "toggle" ]]; then
                     [[ "${FV[$key]}" == "1" ]] && FV[$key]=0 || FV[$key]=1
                     render_form
+                elif [[ "$kind" == "select" ]]; then
+                    run_tzpick
                 else
                     append_char "$key" " "; draw_form_value "$key"; place_form_cursor
                 fi
@@ -462,6 +604,7 @@ render_sshpaste() {
     printf "  ${DIM}${CYAN}"; hr "─" $((TERM_COLS - 4)); printf "${RESET}\n\n"
     printf "  ${DIM}No GitHub username provided. Paste your SSH public key below.${RESET}\n"
     printf "  ${DIM}(Typically starts with ssh-rsa, ssh-ed25519, or ecdsa-sha2)${RESET}\n\n"
+    [[ -n "$SSH_PASTE_ERROR" ]] && printf "  ${BR_RED}%s${RESET}\n\n" "$SSH_PASTE_ERROR"
     printf "  ${BR_CYAN}${ARROW}${RESET} "
     show_cursor
 }
@@ -502,7 +645,7 @@ build_registry() {
     [[ "${FV[AGENT_CODEX]}"  == "1" ]] && add_reg "AI AGENTS" "OpenAI Codex"              CODEX
     [[ "${FV[AGENT_AGY]}"    == "1" ]] && add_reg "AI AGENTS" "Google Antigravity (agy)"  AGY
 
-    add_reg "SYSTEM CONFIG"    "Timezone: America/New_York" TZ
+    add_reg "SYSTEM CONFIG"    "Timezone: ${SETUP_TIMEZONE}" TZ
     add_reg "SYSTEM CONFIG"    "Hostname Configuration"     HOSTNAME
     add_reg "SYSTEM CONFIG"    "Speedtest CLI"              SPEEDTEST
 
@@ -672,10 +815,10 @@ skip_step() {
 # STEP FUNCTIONS
 # ============================================================
 ensure_local_bin_path() {
-    local bashrc="/home/${SETUP_USERNAME}/.bashrc"
+    local bashrc="${USER_HOME}/.bashrc"
     if ! grep -q '.local/bin' "$bashrc" 2>/dev/null; then
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$bashrc"
-        chown "${SETUP_USERNAME}:${SETUP_USERNAME}" "$bashrc"
+        chown "${SETUP_USERNAME}:" "$bashrc"
     fi
 }
 
@@ -710,10 +853,10 @@ step_create_user() {
 step_ensure_docker_group() { usermod -aG docker "$SETUP_USERNAME"; }
 step_configure_npm_global() {
     su - "$SETUP_USERNAME" -c 'mkdir -p ~/.npm-global && npm config set prefix "~/.npm-global"'
-    local bashrc="/home/${SETUP_USERNAME}/.bashrc"
+    local bashrc="${USER_HOME}/.bashrc"
     if ! grep -q '.npm-global/bin' "$bashrc" 2>/dev/null; then
         echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> "$bashrc"
-        chown "${SETUP_USERNAME}:${SETUP_USERNAME}" "$bashrc"
+        chown "${SETUP_USERNAME}:" "$bashrc"
     fi
 }
 step_claude() {
@@ -728,19 +871,24 @@ step_antigravity() {
     ensure_local_bin_path
 }
 step_ssh_keys() {
-    local ssh_dir="/home/${SETUP_USERNAME}/.ssh"
-    mkdir -p "$ssh_dir"
-    if [[ "$SSH_KEY_SOURCE" == "github" ]]; then
-        curl -fsSL "https://github.com/${GITHUB_USER}.keys" -o "$ssh_dir/authorized_keys"
-    else
-        echo "$MANUAL_SSH_KEY" > "$ssh_dir/authorized_keys"
+    local ssh_dir="${USER_HOME}/.ssh"
+    if ! valid_ssh_keys "$SSH_KEYS"; then
+        echo "No valid SSH public key to install (source: ${SSH_KEY_SOURCE})"
+        return 1
     fi
+    mkdir -p "$ssh_dir"
+    printf '%s\n' "$SSH_KEYS" > "$ssh_dir/authorized_keys"
     chmod 700 "$ssh_dir"
     chmod 600 "$ssh_dir/authorized_keys"
-    chown -R "${SETUP_USERNAME}:${SETUP_USERNAME}" "$ssh_dir"
+    chown -R "${SETUP_USERNAME}:" "$ssh_dir"
 }
 step_ssh_hardening() {
     local config="/etc/ssh/sshd_config"
+    # Never disable password login unless a usable key is in place
+    if ! ssh-keygen -lf "${USER_HOME}/.ssh/authorized_keys" >/dev/null 2>&1; then
+        echo "Refusing to harden SSH: no valid key in ${USER_HOME}/.ssh/authorized_keys"
+        return 1
+    fi
     sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' "$config"
     sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' "$config"
     if [ -d /etc/ssh/sshd_config.d ]; then
@@ -751,7 +899,7 @@ step_ssh_hardening() {
     fi
     systemctl restart ssh
 }
-step_timezone() { timedatectl set-timezone America/New_York; }
+step_timezone() { timedatectl set-timezone "$SETUP_TIMEZONE"; }
 step_hostname() { [[ -n "$NEW_HOSTNAME" ]] && hostnamectl set-hostname "$NEW_HOSTNAME"; return 0; }
 step_qemu_guest() {
     apt install -y qemu-guest-agent
@@ -788,7 +936,7 @@ render_complete() {
     [[ -n "$NEW_HOSTNAME" ]] && printf "  ${BOLD}Hostname${RESET}    %s\n" "$NEW_HOSTNAME"
     printf "  ${BOLD}User${RESET}        ${SETUP_USERNAME} (sudo + docker)\n"
     printf "  ${BOLD}SSH${RESET}         Key only, root disabled\n"
-    printf "  ${BOLD}Timezone${RESET}    America/New_York\n"
+    printf "  ${BOLD}Timezone${RESET}    %s\n" "$SETUP_TIMEZONE"
     local now; printf -v now '%(%s)T' -1
     printf "  ${BOLD}Total time${RESET}  %s\n" "$(fmt_elapsed $(( now - START_EPOCH )))"
     printf "  ${BOLD}Log${RESET}         %s\n\n" "$LOG_FILE"
@@ -824,16 +972,26 @@ else
 fi
 GITHUB_USER="${FV[GITHUB]}"
 NEW_HOSTNAME="${FV[HOSTNAME]}"
+SETUP_TIMEZONE="${FV[TIMEZONE]}"
 
-# SSH key source
+# SSH key source (GitHub keys were fetched and validated by the form)
 SSH_KEY_SOURCE="github"
-MANUAL_SSH_KEY=""
+SSH_KEYS="$GITHUB_KEYS"
+SSH_PASTE_ERROR=""
 if [[ -z "$GITHUB_USER" ]]; then
     SSH_KEY_SOURCE="manual"
+    SSH_KEYS=""
     CURRENT_SCREEN="sshpaste"
     render_sshpaste
-    while [[ -z "$MANUAL_SSH_KEY" ]]; do
-        IFS= read -r MANUAL_SSH_KEY || { render_sshpaste; MANUAL_SSH_KEY=""; }
+    while [[ -z "$SSH_KEYS" ]]; do
+        local pasted=""
+        IFS= read -r pasted || { render_sshpaste; continue; }
+        if valid_ssh_keys "$pasted"; then
+            SSH_KEYS="$pasted"
+        else
+            [[ -n "$pasted" ]] && SSH_PASTE_ERROR="Not a valid SSH public key. Paste the full single-line .pub key."
+            render_sshpaste
+        fi
     done
     hide_cursor
 fi
@@ -841,7 +999,7 @@ CURRENT_SCREEN=""
 
 # Log selections
 log "User: '${SETUP_USERNAME}'  Skip-create: ${SKIP_USER_CREATION}  SSH: ${SSH_KEY_SOURCE}"
-log "Hostname: '${NEW_HOSTNAME:-<unchanged>}'"
+log "Hostname: '${NEW_HOSTNAME:-<unchanged>}'  Timezone: '${SETUP_TIMEZONE}'"
 log "Agents: claude=${FV[AGENT_CLAUDE]} codex=${FV[AGENT_CODEX]} agy=${FV[AGENT_AGY]}"
 log "Infra: qemu=${FV[QEMU]} tailscale=${FV[TAILSCALE]}"
 
@@ -865,13 +1023,23 @@ else
     run_step "${RIDX[USER]}" step_create_user
 fi
 
+# Resolve the real home directory (may not be /home/<user> for existing accounts)
+USER_HOME="$(getent passwd "$SETUP_USERNAME" | cut -d: -f6)"
+if [[ -z "$USER_HOME" || ! -d "$USER_HOME" ]]; then
+    set_status "FAILED: no home directory for ${SETUP_USERNAME}   |   Log: $LOG_FILE"
+    log "No home directory found for ${SETUP_USERNAME} (got '${USER_HOME}')"
+    show_cursor
+    move_to $((STATUS_ROW + 2)) 1
+    exit 1
+fi
+
 # Internal (not displayed): npm global prefix so the user never needs sudo
 log "Configuring npm global prefix for ${SETUP_USERNAME}"
 step_configure_npm_global >> "$LOG_FILE" 2>&1
 
 # Move log into the user's home now that the account exists
-NEW_LOG="/home/${SETUP_USERNAME}/$(basename "$LOG_FILE")"
-cp "$LOG_FILE" "$NEW_LOG" 2>/dev/null && { OLD_LOG="$LOG_FILE"; LOG_FILE="$NEW_LOG"; chown "${SETUP_USERNAME}:${SETUP_USERNAME}" "$LOG_FILE"; rm -f "$OLD_LOG"; }
+NEW_LOG="${USER_HOME}/$(basename "$LOG_FILE")"
+cp "$LOG_FILE" "$NEW_LOG" 2>/dev/null && { OLD_LOG="$LOG_FILE"; LOG_FILE="$NEW_LOG"; chown "${SETUP_USERNAME}:" "$LOG_FILE"; rm -f "$OLD_LOG"; }
 
 run_step "${RIDX[SSHKEYS]}"   step_ssh_keys
 run_step "${RIDX[SSHHARDEN]}" step_ssh_hardening
