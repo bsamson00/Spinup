@@ -163,6 +163,7 @@ on_winch() {
             ;;
         sshpaste) render_sshpaste ;;
         tzpick)   render_tzpick ;;
+        summary)  render_summary ;;
     esac
 }
 trap on_winch WINCH
@@ -284,6 +285,7 @@ build_form() {
     add_item group  G_INFRA      "INFRASTRUCTURE"
     add_item toggle QEMU         "QEMU Guest Agent"
     add_item toggle TAILSCALE    "Tailscale"
+    add_item button RUN          "REVIEW & INSTALL"
 
     FV[USERNAME]=""; FV[PASSWORD]=""; FV[GITHUB]=""; FV[HOSTNAME]=""
     FV[TIMEZONE]="$DEFAULT_TIMEZONE"
@@ -348,6 +350,15 @@ draw_form_field() {
     local marker="  "
     (( active )) && marker="${BR_CYAN}${BOLD}${ARROW} ${RESET}"
 
+    if [[ "$kind" == "button" ]]; then
+        if (( active )); then
+            printf "  ${marker}\033[7m${BR_GREEN}${BOLD}  ${ARROW} %s  ${RESET}" "$label"
+        else
+            printf "    ${DIM}${GREEN}[ ${RESET}${GREEN}%s${DIM}${GREEN} ]${RESET}" "$label"
+        fi
+        return
+    fi
+
     if [[ "$kind" == "toggle" ]]; then
         local box="${DIM}${DOT_OFF}${RESET}"
         [[ "${FV[$key]}" == "1" ]] && box="${BR_GREEN}${DOT_ON}${RESET}"
@@ -408,6 +419,7 @@ render_form() {
             continue
         fi
         field_visible "$key" || continue
+        [[ "$kind" == "button" ]] && ((row++))
         ROW_OF[$key]=$row
         draw_form_field "$i" "$row"
         ((row++))
@@ -580,6 +592,8 @@ run_form() {
                     render_form
                 elif [[ "$kind" == "select" ]]; then
                     run_tzpick
+                elif [[ "$kind" == "button" ]]; then
+                    if validate_form; then return; else render_form; fi
                 else
                     append_char "$key" " "; draw_form_value "$key"; place_form_cursor
                 fi
@@ -614,6 +628,99 @@ render_sshpaste() {
     [[ -n "$SSH_PASTE_ERROR" ]] && printf "  ${BR_RED}%s${RESET}\n\n" "$SSH_PASTE_ERROR"
     printf "  ${BR_CYAN}${ARROW}${RESET} "
     show_cursor
+}
+
+# ============================================================
+# REVIEW / CONFIRM SCREEN
+# ============================================================
+SUMMARY_CHOICE=1   # 0 = install, 1 = back (default to back so a stray Enter can't start)
+
+summary_line() { printf "      ${DIM}%-14s${RESET}%s\n" "$1" "$2"; }
+
+render_summary() {
+    if (( TERM_COLS < 54 || TERM_LINES < 18 )); then too_small; return; fi
+    clear_screen
+    draw_box "$SETUP_BOX_TITLE" "$BR_CYAN"
+    move_to 5 1
+    printf "  ${BOLD}${BR_WHITE}Review & Confirm${RESET}\n"
+    printf "  ${DIM}${CYAN}"; hr "─" $((TERM_COLS - 4)); printf "${RESET}\n\n"
+
+    local user_line ssh_line host_line agents="" infra="" nkeys
+    if (( SKIP_USER_CREATION )); then
+        user_line="${SETUP_USERNAME} (existing, keys replaced)"
+    else
+        user_line="${SETUP_USERNAME} (new, sudo + docker)"
+    fi
+    nkeys=$(ssh-keygen -lf /dev/stdin <<< "$SSH_KEYS" 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "$SSH_KEY_SOURCE" == "github" ]]; then
+        ssh_line="github.com/${GITHUB_USER} (${nkeys} key(s))"
+    else
+        ssh_line="pasted $(ssh-keygen -lf /dev/stdin <<< "$SSH_KEYS" 2>/dev/null | awk '{gsub(/[()]/,"",$NF); print $NF" "$2; exit}')"
+    fi
+    host_line="${NEW_HOSTNAME:-unchanged ($(hostname))}"
+    [[ "${FV[AGENT_CLAUDE]}" == "1" ]] && agents+="Claude Code, "
+    [[ "${FV[AGENT_CODEX]}"  == "1" ]] && agents+="OpenAI Codex, "
+    [[ "${FV[AGENT_AGY]}"    == "1" ]] && agents+="Antigravity, "
+    [[ "${FV[QEMU]}" == "1" ]] && (( IS_QEMU_GUEST )) && infra+="QEMU Guest Agent, "
+    [[ "${FV[TAILSCALE]}" == "1" ]] && infra+="Tailscale, "
+    agents="${agents%, }"; infra="${infra%, }"
+
+    printf "  ${BR_CYAN}${BOLD}${BAR} ACCOUNT & ACCESS${RESET}\n"
+    summary_line "User"      "$user_line"
+    summary_line "SSH keys"  "$ssh_line"
+    summary_line "SSH"       "root login and password auth disabled"
+    printf "\n  ${BR_CYAN}${BOLD}${BAR} SYSTEM${RESET}\n"
+    summary_line "Hostname"  "$host_line"
+    summary_line "Timezone"  "$SETUP_TIMEZONE"
+    summary_line "Installs"  "updates, build tools, Node.js 22, Docker, Speedtest"
+    printf "\n  ${BR_CYAN}${BOLD}${BAR} OPTIONAL${RESET}\n"
+    summary_line "AI agents" "${agents:-none}"
+    summary_line "Infra"     "${infra:-none}"
+    printf "\n"
+    if (( DEBUG )); then
+        printf "  ${BR_YELLOW}Debug mode: nothing will be installed or changed.${RESET}\n\n"
+    else
+        printf "  ${BR_YELLOW}The machine reboots automatically when setup finishes.${RESET}\n\n"
+    fi
+
+    printf "   "
+    if (( SUMMARY_CHOICE == 0 )); then
+        printf " \033[7m${BR_GREEN}${BOLD}  ${ARROW} INSTALL  ${RESET} "
+        printf "  ${DIM}[ ${RESET}BACK${DIM} ]${RESET}  "
+    else
+        printf "  ${DIM}${GREEN}[ ${RESET}${GREEN}INSTALL${DIM}${GREEN} ]${RESET}  "
+        printf " \033[7m${BR_CYAN}${BOLD}  ${ARROW} BACK  ${RESET} "
+    fi
+    printf "\n\n  ${DIM}Left/Right or Tab choose    Enter confirm    Esc back${RESET}"
+}
+
+# Returns 0 to install, 1 to go back to the form
+run_summary() {
+    CURRENT_SCREEN="summary"
+    SUMMARY_CHOICE=1
+    hide_cursor
+    render_summary
+    local ch a b
+    while true; do
+        IFS= read -rsn1 ch || continue   # read interrupted (likely SIGWINCH); trap already redrew
+        if [[ "$ch" == "" ]]; then                           # Enter
+            CURRENT_SCREEN=""
+            return "$SUMMARY_CHOICE"
+        elif [[ "$ch" == $'\t' ]]; then
+            SUMMARY_CHOICE=$(( 1 - SUMMARY_CHOICE ))
+        elif [[ "$ch" == $'\x1b' ]]; then
+            a=""; b=""
+            IFS= read -rsn1 -t 0.05 a || true
+            IFS= read -rsn1 -t 0.05 b || true
+            if [[ -z "$a" ]]; then CURRENT_SCREEN=""; return 1; fi   # bare Esc = back
+            if [[ "$a" == "[" ]]; then
+                case "$b" in
+                    C|D|Z) SUMMARY_CHOICE=$(( 1 - SUMMARY_CHOICE )) ;;
+                esac
+            fi
+        fi
+        render_summary
+    done
 }
 
 # ============================================================
@@ -974,44 +1081,50 @@ if [[ -n "$DETECTED_USER" ]] && ! id "$DETECTED_USER" &>/dev/null; then DETECTED
 
 # Consolidated options form
 build_form
-run_form
 
-# Derive account settings
-if [[ "${FV[CREATE_USER]}" == "1" ]]; then
-    SETUP_USERNAME="${FV[USERNAME]}"
-    SETUP_PASSWORD="${FV[PASSWORD]}"
-    SKIP_USER_CREATION=0
-else
-    if [[ -n "$DETECTED_USER" ]]; then SETUP_USERNAME="$DETECTED_USER"; else SETUP_USERNAME="${FV[USERNAME]}"; fi
-    SETUP_PASSWORD=""
-    SKIP_USER_CREATION=1
-fi
-GITHUB_USER="${FV[GITHUB]}"
-NEW_HOSTNAME="${FV[HOSTNAME]}"
-SETUP_TIMEZONE="${FV[TIMEZONE]}"
+# Form -> (SSH key paste) -> review; "Back" on the review returns to the form
+while true; do
+    run_form
 
-# SSH key source (GitHub keys were fetched and validated by the form)
-SSH_KEY_SOURCE="github"
-SSH_KEYS="$GITHUB_KEYS"
-SSH_PASTE_ERROR=""
-if [[ -z "$GITHUB_USER" ]]; then
-    SSH_KEY_SOURCE="manual"
-    SSH_KEYS=""
-    CURRENT_SCREEN="sshpaste"
-    render_sshpaste
-    while [[ -z "$SSH_KEYS" ]]; do
-        local pasted=""
-        IFS= read -r pasted || { render_sshpaste; continue; }
-        if valid_ssh_keys "$pasted"; then
-            SSH_KEYS="$pasted"
-        else
-            [[ -n "$pasted" ]] && SSH_PASTE_ERROR="Not a valid SSH public key. Paste the full single-line .pub key."
-            render_sshpaste
-        fi
-    done
-    hide_cursor
-fi
-CURRENT_SCREEN=""
+    # Derive account settings
+    if [[ "${FV[CREATE_USER]}" == "1" ]]; then
+        SETUP_USERNAME="${FV[USERNAME]}"
+        SETUP_PASSWORD="${FV[PASSWORD]}"
+        SKIP_USER_CREATION=0
+    else
+        if [[ -n "$DETECTED_USER" ]]; then SETUP_USERNAME="$DETECTED_USER"; else SETUP_USERNAME="${FV[USERNAME]}"; fi
+        SETUP_PASSWORD=""
+        SKIP_USER_CREATION=1
+    fi
+    GITHUB_USER="${FV[GITHUB]}"
+    NEW_HOSTNAME="${FV[HOSTNAME]}"
+    SETUP_TIMEZONE="${FV[TIMEZONE]}"
+
+    # SSH key source (GitHub keys were fetched and validated by the form)
+    SSH_KEY_SOURCE="github"
+    SSH_KEYS="$GITHUB_KEYS"
+    SSH_PASTE_ERROR=""
+    if [[ -z "$GITHUB_USER" ]]; then
+        SSH_KEY_SOURCE="manual"
+        SSH_KEYS=""
+        CURRENT_SCREEN="sshpaste"
+        render_sshpaste
+        while [[ -z "$SSH_KEYS" ]]; do
+            local pasted=""
+            IFS= read -r pasted || { render_sshpaste; continue; }
+            if valid_ssh_keys "$pasted"; then
+                SSH_KEYS="$pasted"
+            else
+                [[ -n "$pasted" ]] && SSH_PASTE_ERROR="Not a valid SSH public key. Paste the full single-line .pub key."
+                render_sshpaste
+            fi
+        done
+        hide_cursor
+    fi
+    CURRENT_SCREEN=""
+
+    run_summary && break
+done
 
 # Log selections
 log "User: '${SETUP_USERNAME}'  Skip-create: ${SKIP_USER_CREATION}  SSH: ${SSH_KEY_SOURCE}"
