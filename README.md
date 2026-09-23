@@ -20,6 +20,35 @@ curl -fsSL https://raw.githubusercontent.com/bsamson00/spinup/main/setup.sh | su
 
 The script reattaches stdin to the terminal, so `curl | bash` still gives you the interactive form.
 
+### Go version
+
+[`golang/spinup.go`](golang/spinup.go) is a single-file Go port with the same form, steps and guards. It uses only the standard library (Go 1.21+), so no `go.mod` is needed.
+
+Build on any machine with Go, then copy the binary to the server and run it:
+
+```bash
+GOOS=linux GOARCH=amd64 go build -o spinup ./golang/spinup.go   # GOARCH=arm64 for ARM
+scp spinup user@server:
+ssh -t user@server 'sudo ./spinup'
+```
+
+Or run it straight from the remote on a server that already has Go installed:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bsamson00/spinup/main/golang/spinup.go -o spinup.go
+go build -o spinup spinup.go && sudo ./spinup
+```
+
+Build as your user and run the binary with `sudo`. `sudo go run` often fails because root's `PATH` doesn't include Go.
+
+Add `--debug` to walk through the UI without changing anything. In debug mode the Go version also runs on macOS:
+
+```bash
+go run ./golang/spinup.go --debug
+```
+
+Differences from `setup.sh`: a step fails on its first failing command (not just its last), `curl | bash` installers run with `pipefail`, each command is logged as a `+ cmd` line, and the log is created next to the binary (falling back to `/tmp`).
+
 ## What it does
 
 On launch it shows a **preflight TUI form** to configure the run, then a **review & confirm screen** summarizing everything it's about to do. Nothing is installed until you choose **Install** there. It then executes the selected steps with a live progress screen, and finally **reboots after 10 seconds**.

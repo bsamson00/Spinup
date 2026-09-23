@@ -1822,8 +1822,9 @@ func main() {
 	flag.Parse()
 
 	// OS detection & compatibility guard: Ubuntu 24.04 (noble) and 26.04 (resolute) only.
+	// In debug mode a missing /etc/os-release (e.g. macOS) is tolerated.
 	osr, err := readOSRelease()
-	if err != nil {
+	if err != nil && !debug {
 		fatal("Unsupported system.")
 	}
 	versionID := firstNonEmpty(osr["VERSION_ID"], "unknown")
