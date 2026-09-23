@@ -35,11 +35,10 @@ ssh -t user@server 'sudo ./spinup'
 Or run it straight from the remote on a server that already has Go installed:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bsamson00/spinup/main/golang/spinup.go -o spinup.go
-go build -o spinup spinup.go && sudo ./spinup
+curl -fsSL https://raw.githubusercontent.com/bsamson00/spinup/main/golang/run.sh | bash
 ```
 
-Build as your user and run the binary with `sudo`. `sudo go run` often fails because root's `PATH` doesn't include Go.
+[`golang/run.sh`](golang/run.sh) downloads `spinup.go` and builds it as your user into `./spinup`. It then runs the binary with `sudo`, because `sudo go run` often fails when root's `PATH` doesn't include Go. The `spinup` binary and its log stay in the current directory (the log moves to the user's home once the account exists). It exits with an error if Go isn't installed. Pass arguments with `bash -s --`, e.g. `... | bash -s -- --debug`.
 
 Add `--debug` to walk through the UI without changing anything. In debug mode the Go version also runs on macOS:
 
