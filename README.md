@@ -64,7 +64,7 @@ Always run:
 |---|---|---|
 | System base | System update & upgrade | `apt update && apt upgrade` |
 | System base | Essential packages | build-essential, net-tools, btop, git, ca-certificates, gnupg, lsb-release |
-| System base | Node.js 22.x | via NodeSource |
+| System base | Node.js (latest LTS) | via NodeSource |
 | System base | Docker Engine | official Docker repo + compose/buildx plugins |
 | Account & access | User account | create or reuse; adds to `sudo` and `docker` groups |
 | Account & access | SSH keys | from GitHub or manual paste → `authorized_keys` (must contain a valid key) |
@@ -83,7 +83,7 @@ After completion the script prints a summary (hostname, user, SSH mode, timezone
 
 - Non-root user with `sudo` + `docker`, key-only SSH
 - Root SSH login disabled, password auth disabled
-- Docker, Node 22, and selected agents/tools installed
+- Docker, the latest Node.js LTS, and selected agents/tools installed
 - Tailscale (if selected) installed but not connected — run `sudo tailscale up`
 
 ## Notes & guards

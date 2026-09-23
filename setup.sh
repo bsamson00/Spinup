@@ -672,7 +672,7 @@ render_summary() {
     printf "\n  ${BR_CYAN}${BOLD}${BAR} SYSTEM${RESET}\n"
     summary_line "Hostname"  "$host_line"
     summary_line "Timezone"  "$SETUP_TIMEZONE"
-    summary_line "Installs"  "updates, build tools, Node.js 22, Docker, Speedtest"
+    summary_line "Installs"  "updates, build tools, latest Node.js LTS, Docker, Speedtest"
     printf "\n  ${BR_CYAN}${BOLD}${BAR} OPTIONAL${RESET}\n"
     summary_line "AI agents" "${agents:-none}"
     summary_line "Infra"     "${infra:-none}"
@@ -748,7 +748,7 @@ build_registry() {
 
     add_reg "SYSTEM BASE"      "System Update & Upgrade"   UPDATE
     add_reg "SYSTEM BASE"      "Essential Packages"        ESSENTIALS
-    add_reg "SYSTEM BASE"      "Node.js 22.x"              NODE
+    add_reg "SYSTEM BASE"      "Node.js (latest LTS)"      NODE
     add_reg "SYSTEM BASE"      "Docker Engine"             DOCKER
 
     add_reg "ACCOUNT & ACCESS" "User Account (${user_desc})" USER
@@ -949,7 +949,7 @@ step_essentials() {
     apt install -y build-essential net-tools btop git ca-certificates gnupg lsb-release
 }
 step_nodejs() {
-    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
     apt install -y nodejs
 }
 step_docker() {
