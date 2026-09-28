@@ -941,7 +941,36 @@ ensure_local_bin_path() {
     fi
 }
 
+# Clear a bogus grub-pc/install_devices answer. Some cloud images (Linode) ship
+# the literal string "multiselect" there; grub-pc's postinst then runs
+# "grub-install /multiselect", fails, and takes the whole apt upgrade down with
+# it (dpkg error 1 -> apt exit 100). Blanking the answer and confirming the empty
+# choice makes grub-pc skip grub-install rather than write a boot sector, which
+# is what these images expect anyway.
+repair_grub_install_devices() {
+    local show devices d
+    if ! show="$(debconf-show grub-pc 2>&1)"; then
+        echo "grub-pc debconf state unavailable, skipping check: $show"
+        return 0
+    fi
+    echo "$show"
+
+    devices="$(sed -n 's|^[*[:space:]]*grub-pc/install_devices:[[:space:]]*||p' <<<"$show")"
+    [[ -n "$devices" ]] || return 0
+    for d in $devices; do
+        [[ -e "$d" ]] && continue
+        echo "grub-pc/install_devices is '${devices}', which is not a device; clearing it so grub-install is skipped"
+        printf '%s\n' \
+            'grub-pc grub-pc/install_devices multiselect' \
+            'grub-pc grub-pc/install_devices_empty boolean true' | debconf-set-selections
+        # An earlier failed upgrade may have left grub-pc half-configured.
+        dpkg --configure -a
+        return $?
+    done
+}
+
 step_update() {
+    repair_grub_install_devices
     apt update -y
     apt upgrade -y
 }

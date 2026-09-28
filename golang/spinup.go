@@ -1519,7 +1519,55 @@ func ensureLocalBinPath() error {
 // STEP FUNCTIONS
 // ============================================================
 func stepUpdate(lw io.Writer) error {
+	if err := repairGrubInstallDevices(lw); err != nil {
+		return err
+	}
 	return cmds(lw, []string{"apt", "update", "-y"}, []string{"apt", "upgrade", "-y"})
+}
+
+// debconfValue pulls one answer out of "debconf-show <pkg>" output, whose lines
+// look like "  name: value" (or "* name: value" once the answer has been set).
+func debconfValue(show, name string) (string, bool) {
+	for _, line := range strings.Split(show, "\n") {
+		s := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "*"))
+		if v, ok := strings.CutPrefix(s, name+":"); ok {
+			return strings.TrimSpace(v), true
+		}
+	}
+	return "", false
+}
+
+// repairGrubInstallDevices clears a bogus grub-pc/install_devices answer. Some
+// cloud images (Linode) ship the literal string "multiselect" there; grub-pc's
+// postinst then runs "grub-install /multiselect", fails, and takes the whole
+// apt upgrade down with it (dpkg error 1 -> apt exit 100). Blanking the answer
+// and confirming the empty choice makes grub-pc skip grub-install rather than
+// write a boot sector, which is what these images expect anyway.
+func repairGrubInstallDevices(lw io.Writer) error {
+	var show strings.Builder
+	if err := run(&show, nil, "debconf-show", "grub-pc"); err != nil {
+		fmt.Fprintf(lw, "grub-pc debconf state unavailable, skipping check: %v\n", err)
+		return nil
+	}
+	fmt.Fprint(lw, show.String())
+
+	devices, ok := debconfValue(show.String(), "grub-pc/install_devices")
+	if !ok || devices == "" {
+		return nil
+	}
+	for _, d := range strings.Fields(devices) {
+		if _, err := os.Stat(d); err != nil {
+			fmt.Fprintf(lw, "grub-pc/install_devices is %q, which is not a device; clearing it so grub-install is skipped\n", devices)
+			sel := "grub-pc grub-pc/install_devices multiselect\n" +
+				"grub-pc grub-pc/install_devices_empty boolean true\n"
+			if err := run(lw, strings.NewReader(sel), "debconf-set-selections"); err != nil {
+				return err
+			}
+			// An earlier failed upgrade may have left grub-pc half-configured.
+			return cmd(lw, "dpkg", "--configure", "-a")
+		}
+	}
+	return nil
 }
 
 func stepEssentials(lw io.Writer) error {

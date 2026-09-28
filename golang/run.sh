@@ -31,7 +31,7 @@ main() {
 
     local dir
     dir="$(mktemp -d)"
-    trap 'rm -rf "$dir"' EXIT
+    trap "rm -rf '$dir'" EXIT
 
     # The binary goes in the current directory: spinup writes its log next to itself.
     curl -fsSL https://raw.githubusercontent.com/bsamson00/spinup/main/golang/spinup.go -o "$dir/spinup.go"
